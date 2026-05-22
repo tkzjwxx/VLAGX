@@ -40,7 +40,7 @@ apt install -y -qq curl wget screen jq uuid-runtime
 # ----- 安装 sing-box (如果未安装) -----
 if ! command -v sing-box &> /dev/null; then
     info "安装 sing-box..."
-    bash <(wget -qO- -o- https://github.com/233boy/sing-box/raw/main/install.sh)
+    bash <(wget -qO- -o- curl -fsSL https://sing-box.app/install.sh | sh)
 else
     info "sing-box 已安装，跳过安装步骤"
 fi
