@@ -10,6 +10,11 @@ echo ""
 # --- 1. 交互式获取用户参数 ---
 read -p "请输入 Argo 隧道绑定的域名 (如 us3.989269.xyz): " ARGO_DOMAIN
 read -p "请输入 Argo 隧道的 Token: " ARGO_TOKEN
+read -p "请输入 Sing-box 监听端口 (直接回车将默认设置为 8080): " USER_PORT
+if [ -z "$USER_PORT" ]; then
+    USER_PORT="8080"
+    echo "已设置为默认端口: 8080"
+fi
 read -p "请输入自定义 UUID (直接回车将自动生成一个): " USER_UUID
 if [ -z "$USER_UUID" ]; then
     USER_UUID=$(cat /proc/sys/kernel/random/uuid)
@@ -37,7 +42,6 @@ mkdir -p /root/warp_temp && cd /root/warp_temp
 sed -i '/api.cloudflareclient.com/d' /etc/hosts
 echo "2606:4700::6812:7c60 api.cloudflareclient.com" >> /etc/hosts
 
-# 使用 CDN 镜像代理下载 wgcf，彻底告别断流
 wget -N https://ghproxy.net/https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf > /dev/null 2>&1
 chmod +x /usr/local/bin/wgcf
 
@@ -65,17 +69,16 @@ if [ -z "$WARP_PRIV_KEY" ]; then
     echo "错误：WARP 账号申请失败！"
     exit 1
 fi
-echo ">> WARP 账号生成成功！(已获取双栈 IP 及私钥)"
+echo ">> WARP 账号生成成功！"
 
 # --- 4. 安装 Sing-box 内核 ---
 echo ">> [3/5] 正在安装 Sing-box 官方原生内核 (CDN加速版)..."
 rm -rf /etc/sing-box/config.json 2>/dev/null
-# 弃用官方 bash 脚本，直接通过 CDN 镜像秒下 deb 安装包！
 wget -qO sing-box.deb "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/v1.13.12/sing-box_1.13.12_linux_amd64.deb"
 dpkg -i sing-box.deb > /dev/null 2>&1
 rm -f sing-box.deb
 
-# --- 5. 生成 Sing-box 专属配置 ---
+# --- 5. 生成 Sing-box 专属配置 (端口动态化) ---
 echo ">> [4/5] 正在生成 Sing-box 专属配置..."
 cat > /etc/sing-box/config.json << CONFIG_EOF
 {
@@ -89,7 +92,7 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
       "type": "vless",
       "tag": "vless-in",
       "listen": "127.0.0.1",
-      "listen_port": 8080,
+      "listen_port": ${USER_PORT},
       "users": [
         {
           "uuid": "${USER_UUID}",
@@ -161,13 +164,19 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
 }
 CONFIG_EOF
 
+# 【核心修复】全自动注入环境变量，彻底解决最新内核遗留 DNS 报错卡死的问题
+mkdir -p /etc/systemd/system/sing-box.service.d
+cat << 'EOF' > /etc/systemd/system/sing-box.service.d/override.conf
+[Service]
+Environment="ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true"
+EOF
+
 systemctl daemon-reload
 systemctl enable sing-box > /dev/null 2>&1
 systemctl restart sing-box
 
 # --- 6. 安装并启动 Argo 隧道 ---
 echo ">> [5/5] 正在打通 Argo CDN 隧道 (CDN加速版)..."
-# 同样使用 CDN 加速下载 cloudflared
 curl -L "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" -o /usr/local/bin/cloudflared > /dev/null 2>&1
 chmod +x /usr/local/bin/cloudflared
 screen -S argo -X quit 2>/dev/null
@@ -184,5 +193,4 @@ echo "V2rayN 一键导入链接："
 echo -e "\033[32m${VLESS_LINK}\033[0m"
 echo "=========================================================="
 
-# 运行完毕清理临时文件
 rm -rf /root/warp_temp
