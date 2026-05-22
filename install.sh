@@ -30,33 +30,53 @@ echo ">> [1/5] 正在安装系统基础组件..."
 apt update -y > /dev/null 2>&1
 apt install -y curl wget jq qrencode screen > /dev/null 2>&1
 
-# --- 3. 申请专属 WARP 账号与密钥 ---
+# --- 3. 申请专属 WARP 账号与密钥 (带防卡死与双重保险机制) ---
 echo ">> [2/5] 正在向 Cloudflare 申请专属 WARP 账号与密钥..."
+mkdir -p /root/warp_temp && cd /root/warp_temp
+
+# 【核心黑科技】强制让 Cloudflare API 走干净的原生 IPv6，绕过被墙的 NAT64
+sed -i '/api.cloudflareclient.com/d' /etc/hosts
+echo "2606:4700::6812:7c60 api.cloudflareclient.com" >> /etc/hosts
+
 wget -N https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf > /dev/null 2>&1
 chmod +x /usr/local/bin/wgcf
-mkdir -p /root/warp_temp && cd /root/warp_temp
-yes | wgcf register > /dev/null 2>&1
-wgcf generate > /dev/null 2>&1
 
-WARP_PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf | awk -F ' = ' '{print $2}')
-WARP_IPV4=$(grep "Address" wgcf-profile.conf | head -n 1 | awk -F ' = ' '{print $2}')
-WARP_IPV6=$(grep "Address" wgcf-profile.conf | tail -n 1 | awk -F ' = ' '{print $2}')
+# 使用 timeout 超时退出，并使用官方参数自动同意协议，杜绝管道卡死
+timeout 20 wgcf register --accept-tos > /dev/null 2>&1
+timeout 10 wgcf generate > /dev/null 2>&1
+
+WARP_PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf 2>/dev/null | awk -F ' = ' '{print $2}')
+WARP_IPV4=$(grep "Address" wgcf-profile.conf 2>/dev/null | head -n 1 | awk -F ' = ' '{print $2}')
+WARP_IPV6=$(grep "Address" wgcf-profile.conf 2>/dev/null | tail -n 1 | awk -F ' = ' '{print $2}')
+
+# 【备用方案】如果 wgcf 引擎失败，自动切换至 warp-go 引擎进行申请
+if [ -z "$WARP_PRIV_KEY" ]; then
+    echo ">> wgcf 引擎申请超时，正在自动切换至 warp-go 备用引擎重试..."
+    wget -N https://raw.githubusercontent.com/fscarmen/warp/main/warp-go/warp-go-linux-amd64 -O /usr/local/bin/warp-go > /dev/null 2>&1
+    chmod +x /usr/local/bin/warp-go
+    timeout 20 /usr/local/bin/warp-go --register --export-wireguard /root/warp_temp/warp.conf > /dev/null 2>&1
+    
+    WARP_PRIV_KEY=$(grep -oE "PrivateKey\s*=\s*[A-Za-z0-9+/=]+" /root/warp_temp/warp.conf 2>/dev/null | awk -F '=' '{print $2}' | tr -d ' ')
+    WARP_IPV4=$(grep -oE "172\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+" /root/warp_temp/warp.conf 2>/dev/null)
+    WARP_IPV6=$(grep -oE "2606:[a-f0-9:]+/[0-9]+" /root/warp_temp/warp.conf 2>/dev/null)
+fi
 
 if [ -z "$WARP_PRIV_KEY" ]; then
-    echo "错误：WARP 账号生成失败，请检查网络或稍后重试。"
+    echo "错误：WARP 账号自动生成彻底失败。当前 VPS 的网络环境极其受限。"
     exit 1
 fi
 echo ">> WARP 账号生成成功！(已获取双栈 IP 及私钥)"
 
+# 恢复 hosts，不影响系统后续运行
+sed -i '/api.cloudflareclient.com/d' /etc/hosts
+
 # --- 4. 安装 Sing-box 内核 ---
 echo ">> [3/5] 正在安装 Sing-box 官方原生内核..."
-# 清理可能存在的旧配置，防止安装时弹出 (Y/N) 交互阻断脚本
 rm -rf /etc/sing-box/config.json 2>/dev/null
 curl -fsSL https://sing-box.app/install.sh | bash
 
 # --- 5. 生成 Sing-box 专属配置 (内置 VLESS+WARP双栈+防泄漏) ---
 echo ">> [4/5] 正在生成 Sing-box 专属配置..."
-# 注意：这里改成了官方正确的 /etc/sing-box 路径！
 cat > /etc/sing-box/config.json << CONFIG_EOF
 {
   "log": {
