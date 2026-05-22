@@ -1,7 +1,8 @@
 #!/bin/bash
 #===================================================
 # 蓝多依诺 VPS 一键部署脚本 (官方 sing-box + WARP + Argo)
-# 协议: VLESS + HTTPUpgrade， WARP 通过 WireGuard 端点出站
+# 协议: VLESS + HTTPUpgrade, WARP 通过 WireGuard 端点出站
+# 完全使用 curl，无 wget 依赖
 #===================================================
 set -e
 
