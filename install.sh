@@ -1,79 +1,143 @@
 #!/bin/bash
+#===================================================
+# 蓝多依诺 VPS 一键部署脚本
+# 协议: VLESS + HTTPUpgrade + WARP WireGuard + Argo Tunnel
+# 适用: 纯 IPv6 / 双栈 VPS (Debian/Ubuntu)
+#===================================================
 
-# ====================================================
-# HAX 纯 IPv6 专属：Sing-box + WARP + Argo 终极全自动闭环版
-# 特性: 战前自动清场, 纯交互参数, 离线直装, 绝对 0 报错静默执行
-# ====================================================
+set -e
 
-GREEN="\033[32m"
-YELLOW="\033[33m"
-RED="\033[31m"
-RESET="\033[0m"
+# ----- 颜色输出 -----
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
-echo -e "${GREEN}=== HAX 纯 IPv6 专属极客部署 (洁癖打磨版) ===${RESET}"
+info() { echo -e "${GREEN}[信息]${NC} $1"; }
+warn() { echo -e "${YELLOW}[警告]${NC} $1"; }
+error() { echo -e "${RED}[错误]${NC} $1"; exit 1; }
 
-# 1. 强制固化 NAT64/DNS64 网关
-echo -e "\n${GREEN}[1/4] 正在固化 IPv4 访问能力并清理环境...${RESET}"
-chattr -i /etc/resolv.conf 2>/dev/null || true
-echo -e "nameserver 2a00:1098:2b::1\nnameserver 2a01:4f8:c2c:123f::1" > /etc/resolv.conf
-chattr +i /etc/resolv.conf 2>/dev/null || true
+# ----- 检查 root 权限 -----
+[[ $EUID -ne 0 ]] && error "请使用 root 权限运行该脚本"
 
-# 【核心修复1】清理上一版遗留的坏源，防止 apt update 中断
-rm -f /etc/apt/sources.list.d/sagernet.list
-sleep 1
-
-# 2. 纯交互式获取参数
-echo -e "\n${GREEN}[2/4] 请输入你的专属节点参数：${RESET}"
-echo -e "${YELLOW}--- WARP 拨号配置 ---${RESET}"
-read -p "1. WARP PrivateKey (私钥): " WARP_PK
-read -p "2. WARP IPv6 (如 2606:4700... 不带 /128): " WARP_IPV6
-read -p "3. Reserved (含方括号，回车默认 [0,0,0]): " WARP_RESERVED
-WARP_RESERVED=${WARP_RESERVED:-"[0,0,0]"}
-
-echo -e "\n${YELLOW}--- Argo 隧道配置 ---${RESET}"
-read -p "4. Argo Tunnel Token: " ARGO_TOKEN
-read -p "5. 绑定的 Argo 域名 (如 a.abc.com): " ARGO_DOMAIN
-
-echo -e "\n${YELLOW}--- Sing-box 节点配置 ---${RESET}"
-read -p "6. 设置本地监听端口 (如 60001): " VLESS_PORT
-read -p "7. 设置 WebSocket 路径 (如 /wolovelangduo520): " VLESS_PATH
-[[ "$VLESS_PATH" != /* ]] && VLESS_PATH="/$VLESS_PATH"
-
-VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
-echo -e "\n-> 本机随机生成 UUID: ${YELLOW}${VLESS_UUID}${RESET}"
-
-# 3. 安装配置 Sing-box 服务端
-echo -e "\n${GREEN}[3/4] 正在下载并直装 Sing-box 核心...${RESET}"
-apt update -y && apt install -y curl wget jq
-ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-    SB_ARCH="amd64"
-elif [ "$ARCH" = "aarch64" ]; then
-    SB_ARCH="arm64"
+# ----- 检查系统 -----
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+        warn "当前系统为 $ID，脚本仅测试过 Debian/Ubuntu，继续运行可能遇到问题"
+    fi
 else
-    echo -e "${RED}不支持的架构: $ARCH${RESET}"; exit 1
+    error "无法识别操作系统"
 fi
 
-# 抓取最新版 (不再报 jq 找不到的错误)
-SB_VER=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name | sed 's/v//')
-if [ -z "$SB_VER" ] || [ "$SB_VER" = "null" ]; then
-    SB_VER="1.9.3"
+# ----- 安装必要依赖 -----
+info "更新软件包列表..."
+apt update -qq
+info "安装基础依赖 (curl, wget, screen, jq, uuid-runtime)..."
+apt install -y -qq curl wget screen jq uuid-runtime
+
+# ----- 安装 sing-box (如果未安装) -----
+if ! command -v sing-box &> /dev/null; then
+    info "安装 sing-box..."
+    bash <(wget -qO- -o- https://github.com/233boy/sing-box/raw/main/install.sh)
+else
+    info "sing-box 已安装，跳过安装步骤"
 fi
 
-wget -qO sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box_${SB_VER}_linux_${SB_ARCH}.deb"
+# ----- 交互式收集参数 -----
+echo ""
+echo -e "${BLUE}===========================================${NC}"
+echo -e "${BLUE}  蓝多依诺 VPS 一键部署脚本${NC}"
+echo -e "${BLUE}===========================================${NC}"
+echo ""
 
-# 【核心修复2】提前删除旧配置，防止 dpkg 弹出交互式询问卡死脚本
-rm -f /etc/sing-box/config.json
-dpkg -i sing-box.deb
-rm -f sing-box.deb
+# --- WARP 配置 ---
+echo -e "${YELLOW}【第 1 步】WARP WireGuard 配置${NC}"
+echo "请粘贴从 WARP 网站生成的 WireGuard 配置信息。"
 
-mkdir -p /etc/sing-box
-cat << EOF > /etc/sing-box/config.json
+read -p "WARP PrivateKey: " WARP_PRIVATE_KEY
+[[ -z "$WARP_PRIVATE_KEY" ]] && error "WARP PrivateKey 不能为空"
+
+read -p "WARP PublicKey (默认: bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=): " WARP_PUBLIC_KEY
+WARP_PUBLIC_KEY=${WARP_PUBLIC_KEY:-"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="}
+
+read -p "WARP IPv4 Address (默认: 172.16.0.2/32): " WARP_IPV4
+WARP_IPV4=${WARP_IPV4:-"172.16.0.2/32"}
+
+read -p "WARP IPv6 Address: " WARP_IPV6
+[[ -z "$WARP_IPV6" ]] && error "WARP IPv6 Address 不能为空"
+
+read -p "WARP Endpoint (默认: engage.cloudflareclient.com:2408): " WARP_ENDPOINT
+WARP_ENDPOINT=${WARP_ENDPOINT:-"engage.cloudflareclient.com:2408"}
+
+read -p "WARP Reserved (三个数字，如 92,168,130): " WARP_RESERVED
+[[ -z "$WARP_RESERVED" ]] && WARP_RESERVED="92,168,130"
+WARP_RESERVED1=$(echo $WARP_RESERVED | cut -d, -f1)
+WARP_RESERVED2=$(echo $WARP_RESERVED | cut -d, -f2)
+WARP_RESERVED3=$(echo $WARP_RESERVED | cut -d, -f3)
+
+echo ""
+
+# --- VLESS 配置 ---
+echo -e "${YELLOW}【第 2 步】VLESS + HTTPUpgrade 配置${NC}"
+
+# 自动生成 UUID
+DEFAULT_UUID=$(uuidgen)
+read -p "VLESS UUID (回车自动生成): " VLESS_UUID
+VLESS_UUID=${VLESS_UUID:-$DEFAULT_UUID}
+
+# 自动生成路径
+DEFAULT_PATH="/$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)"
+read -p "HTTPUpgrade 路径 (回车自动生成): " HTTPUPGRADE_PATH
+HTTPUPGRADE_PATH=${HTTPUPGRADE_PATH:-$DEFAULT_PATH}
+
+read -p "sing-box 监听端口 (默认 8080): " LISTEN_PORT
+LISTEN_PORT=${LISTEN_PORT:-8080}
+
+echo ""
+
+# --- Argo 隧道配置 ---
+echo -e "${YELLOW}【第 3 步】Argo 隧道配置${NC}"
+
+read -p "Argo 域名 (如 us3.989269.xyz): " ARGO_DOMAIN
+[[ -z "$ARGO_DOMAIN" ]] && error "Argo 域名不能为空"
+
+read -p "Argo 隧道 Token (eyJ...): " ARGO_TOKEN
+[[ -z "$ARGO_TOKEN" ]] && error "Argo 隧道 Token 不能为空"
+
+echo ""
+
+# ----- 配置确认 -----
+echo -e "${YELLOW}【配置确认】${NC}"
+echo "=================================="
+echo "WARP PrivateKey : ${WARP_PRIVATE_KEY:0:20}..."
+echo "WARP PublicKey  : ${WARP_PUBLIC_KEY:0:20}..."
+echo "WARP IPv4       : $WARP_IPV4"
+echo "WARP IPv6       : $WARP_IPV6"
+echo "WARP Endpoint   : $WARP_ENDPOINT"
+echo "WARP Reserved   : $WARP_RESERVED"
+echo "----------------------------------"
+echo "VLESS UUID      : $VLESS_UUID"
+echo "HTTPUpgrade 路径: $HTTPUPGRADE_PATH"
+echo "监听端口        : $LISTEN_PORT"
+echo "----------------------------------"
+echo "Argo 域名       : $ARGO_DOMAIN"
+echo "Argo Token      : ${ARGO_TOKEN:0:20}..."
+echo "=================================="
+read -p "确认无误？(Y/n): " confirm
+[[ "$confirm" != "Y" && "$confirm" != "y" && "$confirm" != "" ]] && { info "已取消部署"; exit 0; }
+
+# ----- 生成 sing-box 配置文件 -----
+info "生成 /etc/sing-box/config.json ..."
+
+cat > /etc/sing-box/config.json <<EOF
 {
-  "log": { "level": "info" },
+  "log": { "level": "info", "timestamp": true },
   "dns": {
     "servers": [
-      { "tag": "dns_direct", "type": "udp", "server": "2606:4700:4700::1111" }
+      { "tag": "dns_remote", "type": "udp", "server": "1.1.1.1", "detour": "warp-out" },
+      { "tag": "dns_local", "type": "udp", "server": "2606:4700:4700::1111" }
     ],
     "strategy": "prefer_ipv6"
   },
@@ -81,14 +145,14 @@ cat << EOF > /etc/sing-box/config.json
     {
       "type": "wireguard",
       "tag": "warp-out",
-      "address": [ "172.16.0.2/32", "${WARP_IPV6}/128" ],
-      "private_key": "${WARP_PK}",
+      "address": ["$WARP_IPV4", "$WARP_IPV6"],
+      "private_key": "$WARP_PRIVATE_KEY",
       "peers": [
         {
-          "address": "2606:4700:d0::a29f:c001",
+          "address": "$WARP_ENDPOINT",
           "port": 2408,
-          "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-          "reserved": ${WARP_RESERVED},
+          "public_key": "$WARP_PUBLIC_KEY",
+          "reserved": [$WARP_RESERVED1, $WARP_RESERVED2, $WARP_RESERVED3],
           "allowed_ips": ["0.0.0.0/0", "::/0"]
         }
       ],
@@ -100,15 +164,16 @@ cat << EOF > /etc/sing-box/config.json
       "type": "vless",
       "tag": "vless-in",
       "listen": "127.0.0.1",
-      "listen_port": ${VLESS_PORT},
-      "users": [{ "uuid": "${VLESS_UUID}" }],
-      "transport": { "type": "httpupgrade", "path": "${VLESS_PATH}" }
+      "listen_port": $LISTEN_PORT,
+      "users": [{ "uuid": "$VLESS_UUID" }],
+      "transport": { "type": "httpupgrade", "path": "$HTTPUPGRADE_PATH" }
     }
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct" }
   ],
   "route": {
+    "default_domain_resolver": "dns_remote",
     "rules": [
       { "inbound": "vless-in", "outbound": "warp-out" }
     ],
@@ -117,38 +182,54 @@ cat << EOF > /etc/sing-box/config.json
 }
 EOF
 
-systemctl enable --now sing-box
+# 重启 sing-box
+info "重启 sing-box..."
 systemctl restart sing-box
 
-# 4. 安装配置 Cloudflare Argo 隧道
-echo -e "\n${GREEN}[4/4] 正在下载并重置 Cloudflare Argo 隧道...${RESET}"
-if [ "$ARCH" = "x86_64" ]; then
-    CF_ARCH="amd64"
-elif [ "$ARCH" = "aarch64" ]; then
-    CF_ARCH="arm64"
+# ----- 安装 cloudflared (如果未安装) -----
+if ! command -v cloudflared &> /dev/null; then
+    info "安装 cloudflared..."
+    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+    chmod +x /usr/local/bin/cloudflared
+else
+    info "cloudflared 已安装，跳过安装步骤"
 fi
 
-wget -qO cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}.deb"
-dpkg -i cloudflared.deb
-rm -f cloudflared.deb
+# ----- 启动 Argo 隧道 -----
+info "启动 Argo 隧道..."
+# 杀掉可能已有的 argo screen 会话
+screen -ls | grep -q argo && screen -S argo -X quit
+screen -dmS argo cloudflared tunnel --no-autoupdate run --token $ARGO_TOKEN
 
-# 【核心修复3】提前卸载可能存在的旧服务，防止 Token 注入失败
-cloudflared service uninstall 2>/dev/null || true
-cloudflared service install "${ARGO_TOKEN}"
-systemctl start cloudflared
-systemctl enable cloudflared
+# 等待隧道建立
+sleep 3
+if screen -ls | grep -q argo; then
+    info "Argo 隧道已启动"
+else
+    warn "Argo 隧道可能启动失败，请检查 Token 是否正确"
+fi
 
-# 5. 生成客户端 VLESS 链接
-VLESS_PATH_ENC=$(echo -n "${VLESS_PATH}" | sed 's/\//%2F/g')
-VLESS_LINK="vless://${VLESS_UUID}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=httpupgrade&path=${VLESS_PATH_ENC}#HAX_Singbox"
-
-echo -e "\n========================================================="
-echo -e "${GREEN}🎉 ALL IN ONE 部署完成！Sing-box 与 Argo 隧道均已拉起！${RESET}"
-echo -e "========================================================="
-echo -e "${GREEN}👇 你的专属 VLESS 一键导入链接 👇${RESET}"
-echo -e "${YELLOW}${VLESS_LINK}${RESET}"
-echo -e "========================================================="
-echo -e "⚠️ 【最后一步】请前往 Cloudflare Zero Trust 控制台："
-echo -e "确保你的 Tunnels -> Public Hostname 流量转发目标设置为："
-echo -e "👉  ${YELLOW}http://localhost:${VLESS_PORT}${RESET}"
-echo -e "========================================================="
+# ----- 输出客户端信息 -----
+echo ""
+echo -e "${GREEN}===========================================${NC}"
+echo -e "${GREEN}  蓝多依诺 VPS 一键部署完成！${NC}"
+echo -e "${GREEN}===========================================${NC}"
+echo ""
+echo "  协议: VLESS"
+echo "  地址: $ARGO_DOMAIN"
+echo "  端口: 443"
+echo "  UUID: $VLESS_UUID"
+echo "  传输: httpupgrade"
+echo "  路径: $HTTPUPGRADE_PATH"
+echo "  TLS: 由 Cloudflare CDN 提供"
+echo "  SNI: $ARGO_DOMAIN"
+echo ""
+echo -e "${BLUE}分享链接:${NC}"
+echo "vless://$VLESS_UUID@$ARGO_DOMAIN:443?type=tcp&security=tls&encryption=none&transport=httpupgrade&path=$(echo $HTTPUPGRADE_PATH | sed 's/\//%2F/g')&sni=$ARGO_DOMAIN"
+echo ""
+echo -e "${YELLOW}请确保已在 Cloudflare Zero Trust 面板中配置:${NC}"
+echo "  Domain: $ARGO_DOMAIN"
+echo "  Service: HTTP → localhost:$LISTEN_PORT"
+echo "  (路径可留空，也可填写 $HTTPUPGRADE_PATH)"
+echo ""
+echo -e "${GREEN}享受高速安全上网！${NC}"
