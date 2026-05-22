@@ -2,7 +2,7 @@
 
 # ====================================================
 # HAX 纯 IPv6 专属：Sing-box + WARP + Argo 终极全自动闭环版
-# 特性: 强制固化 NAT64, 纯交互式参数录入, 强制 IPv4 绕过残缺路由
+# 特性: 强制固化 NAT64, 纯交互式参数, 弃用 APT 源改用包直装绝对防阻断
 # ====================================================
 
 GREEN="\033[32m"
@@ -10,7 +10,7 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
-echo -e "${GREEN}=== HAX 纯 IPv6 专属极客部署 (终极强杀 ALL IN ONE) ===${RESET}"
+echo -e "${GREEN}=== HAX 纯 IPv6 专属极客部署 (离线直装终极版) ===${RESET}"
 
 # 1. 强制固化 NAT64/DNS64 网关 (纯6机器破冰)
 echo -e "\n${GREEN}[1/4] 正在固化 IPv4 访问能力...${RESET}"
@@ -19,7 +19,7 @@ echo -e "nameserver 2a00:1098:2b::1\nnameserver 2a01:4f8:c2c:123f::1" > /etc/res
 chattr +i /etc/resolv.conf 2>/dev/null || true
 sleep 1
 
-# 2. 纯交互式获取所有参数 (绝对不强制指定)
+# 2. 纯交互式获取所有参数
 echo -e "\n${GREEN}[2/4] 请输入你的专属节点参数：${RESET}"
 echo -e "${YELLOW}--- WARP 拨号配置 ---${RESET}"
 read -p "1. WARP PrivateKey (私钥): " WARP_PK
@@ -34,19 +34,32 @@ read -p "5. 绑定的 Argo 域名 (如 a.abc.com): " ARGO_DOMAIN
 echo -e "\n${YELLOW}--- Sing-box 节点配置 ---${RESET}"
 read -p "6. 设置本地监听端口 (如 60001): " VLESS_PORT
 read -p "7. 设置 WebSocket 路径 (如 /wolovelangduo520): " VLESS_PATH
-# 确保路径以 / 开头
 [[ "$VLESS_PATH" != /* ]] && VLESS_PATH="/$VLESS_PATH"
 
 VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
 echo -e "\n-> 本机随机生成 UUID: ${YELLOW}${VLESS_UUID}${RESET}"
 
-# 3. 安装配置 Sing-box 服务端 (强制走 IPv4 隧道规避超时)
-echo -e "\n${GREEN}[3/4] 正在强制通过 NAT64 安装 Sing-box...${RESET}"
-apt -o Acquire::ForceIPv4=true update -y && apt -o Acquire::ForceIPv4=true install -y curl gnupg2 ca-certificates wget
-curl -4 -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
-chmod a+r /etc/apt/keyrings/sagernet.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" | tee /etc/apt/sources.list.d/sagernet.list > /dev/null
-apt -o Acquire::ForceIPv4=true update -y && apt -o Acquire::ForceIPv4=true install -y sing-box
+# 3. 安装配置 Sing-box 服务端 (改用 GitHub Release 直装，告别 APT 超时)
+echo -e "\n${GREEN}[3/4] 正在下载并直装 Sing-box 核心...${RESET}"
+apt update -y && apt install -y curl wget jq
+ARCH=$(uname -m)
+if [ "$ARCH" = "x86_64" ]; then
+    SB_ARCH="amd64"
+elif [ "$ARCH" = "aarch64" ]; then
+    SB_ARCH="arm64"
+else
+    echo -e "${RED}不支持的架构: $ARCH${RESET}"; exit 1
+fi
+
+# 自动获取 Sing-box 最新版本号
+SB_VER=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name | sed 's/v//')
+if [ -z "$SB_VER" ] || [ "$SB_VER" = "null" ]; then
+    SB_VER="1.9.3" # API 失败时的保底稳定版本
+fi
+
+wget -qO sing-box.deb "https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/sing-box_${SB_VER}_linux_${SB_ARCH}.deb"
+dpkg -i sing-box.deb
+rm -f sing-box.deb
 
 mkdir -p /etc/sing-box
 cat << EOF > /etc/sing-box/config.json
@@ -101,19 +114,15 @@ EOF
 systemctl enable --now sing-box
 systemctl restart sing-box
 
-# 4. 安装配置 Cloudflare Argo 隧道 (强制走 IPv4 规避超时)
-echo -e "\n${GREEN}[4/4] 正在安装并注册 Cloudflare Argo 隧道...${RESET}"
-ARCH=$(uname -m)
+# 4. 安装配置 Cloudflare Argo 隧道
+echo -e "\n${GREEN}[4/4] 正在下载并注册 Cloudflare Argo 隧道...${RESET}"
 if [ "$ARCH" = "x86_64" ]; then
-    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"
+    CF_ARCH="amd64"
 elif [ "$ARCH" = "aarch64" ]; then
-    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb"
-else
-    echo -e "${RED}不支持的架构: $ARCH${RESET}"
-    exit 1
+    CF_ARCH="arm64"
 fi
 
-wget -4 -qO cloudflared.deb "$URL"
+wget -qO cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}.deb"
 dpkg -i cloudflared.deb
 rm -f cloudflared.deb
 
