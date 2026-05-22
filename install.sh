@@ -30,18 +30,17 @@ echo ">> [1/5] 正在安装系统基础组件..."
 apt update -y > /dev/null 2>&1
 apt install -y curl wget jq qrencode screen > /dev/null 2>&1
 
-# --- 3. 申请专属 WARP 账号与密钥 (带防卡死与双重保险机制) ---
+# --- 3. 申请专属 WARP 账号与密钥 (带防卡死机制) ---
 echo ">> [2/5] 正在向 Cloudflare 申请专属 WARP 账号与密钥..."
 mkdir -p /root/warp_temp && cd /root/warp_temp
 
-# 【核心黑科技】强制让 Cloudflare API 走干净的原生 IPv6，绕过被墙的 NAT64
 sed -i '/api.cloudflareclient.com/d' /etc/hosts
 echo "2606:4700::6812:7c60 api.cloudflareclient.com" >> /etc/hosts
 
-wget -N https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf > /dev/null 2>&1
+# 使用 CDN 镜像代理下载 wgcf，彻底告别断流
+wget -N https://ghproxy.net/https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf > /dev/null 2>&1
 chmod +x /usr/local/bin/wgcf
 
-# 使用 timeout 超时退出，并使用官方参数自动同意协议，杜绝管道卡死
 timeout 20 wgcf register --accept-tos > /dev/null 2>&1
 timeout 10 wgcf generate > /dev/null 2>&1
 
@@ -49,10 +48,9 @@ WARP_PRIV_KEY=$(grep "PrivateKey" wgcf-profile.conf 2>/dev/null | awk -F ' = ' '
 WARP_IPV4=$(grep "Address" wgcf-profile.conf 2>/dev/null | head -n 1 | awk -F ' = ' '{print $2}')
 WARP_IPV6=$(grep "Address" wgcf-profile.conf 2>/dev/null | tail -n 1 | awk -F ' = ' '{print $2}')
 
-# 【备用方案】如果 wgcf 引擎失败，自动切换至 warp-go 引擎进行申请
 if [ -z "$WARP_PRIV_KEY" ]; then
-    echo ">> wgcf 引擎申请超时，正在自动切换至 warp-go 备用引擎重试..."
-    wget -N https://raw.githubusercontent.com/fscarmen/warp/main/warp-go/warp-go-linux-amd64 -O /usr/local/bin/warp-go > /dev/null 2>&1
+    echo ">> wgcf 引擎申请超时，自动切换备用引擎..."
+    wget -N https://ghproxy.net/https://raw.githubusercontent.com/fscarmen/warp/main/warp-go/warp-go-linux-amd64 -O /usr/local/bin/warp-go > /dev/null 2>&1
     chmod +x /usr/local/bin/warp-go
     timeout 20 /usr/local/bin/warp-go --register --export-wireguard /root/warp_temp/warp.conf > /dev/null 2>&1
     
@@ -61,21 +59,23 @@ if [ -z "$WARP_PRIV_KEY" ]; then
     WARP_IPV6=$(grep -oE "2606:[a-f0-9:]+/[0-9]+" /root/warp_temp/warp.conf 2>/dev/null)
 fi
 
+sed -i '/api.cloudflareclient.com/d' /etc/hosts
+
 if [ -z "$WARP_PRIV_KEY" ]; then
-    echo "错误：WARP 账号自动生成彻底失败。当前 VPS 的网络环境极其受限。"
+    echo "错误：WARP 账号申请失败！"
     exit 1
 fi
 echo ">> WARP 账号生成成功！(已获取双栈 IP 及私钥)"
 
-# 恢复 hosts，不影响系统后续运行
-sed -i '/api.cloudflareclient.com/d' /etc/hosts
-
 # --- 4. 安装 Sing-box 内核 ---
-echo ">> [3/5] 正在安装 Sing-box 官方原生内核..."
+echo ">> [3/5] 正在安装 Sing-box 官方原生内核 (CDN加速版)..."
 rm -rf /etc/sing-box/config.json 2>/dev/null
-curl -fsSL https://sing-box.app/install.sh | bash
+# 弃用官方 bash 脚本，直接通过 CDN 镜像秒下 deb 安装包！
+wget -qO sing-box.deb "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/v1.13.12/sing-box_1.13.12_linux_amd64.deb"
+dpkg -i sing-box.deb > /dev/null 2>&1
+rm -f sing-box.deb
 
-# --- 5. 生成 Sing-box 专属配置 (内置 VLESS+WARP双栈+防泄漏) ---
+# --- 5. 生成 Sing-box 专属配置 ---
 echo ">> [4/5] 正在生成 Sing-box 专属配置..."
 cat > /etc/sing-box/config.json << CONFIG_EOF
 {
@@ -166,8 +166,9 @@ systemctl enable sing-box > /dev/null 2>&1
 systemctl restart sing-box
 
 # --- 6. 安装并启动 Argo 隧道 ---
-echo ">> [5/5] 正在打通 Argo CDN 隧道..."
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared > /dev/null 2>&1
+echo ">> [5/5] 正在打通 Argo CDN 隧道 (CDN加速版)..."
+# 同样使用 CDN 加速下载 cloudflared
+curl -L "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" -o /usr/local/bin/cloudflared > /dev/null 2>&1
 chmod +x /usr/local/bin/cloudflared
 screen -S argo -X quit 2>/dev/null
 screen -dmS argo cloudflared tunnel --no-autoupdate run --token ${ARGO_TOKEN}
