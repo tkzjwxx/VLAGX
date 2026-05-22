@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ====================================================
-# HAX 纯 IPv6 专属：Sing-box + WARP 原生双栈（Argo 交互与分享链接版）
-# 特性: 固化 NAT64, 纯手动填入 WARP 参数, 自动生成 VLESS 一键导入链接
+# HAX 纯 IPv6 专属：Sing-box + WARP + Argo 终极全自动闭环版
+# 特性: 强制固化 NAT64, 纯交互式参数录入, 零硬编码, 一键双端拉起
 # ====================================================
 
 GREEN="\033[32m"
@@ -10,40 +10,44 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
-echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (Argo+链接版) ===${RESET}"
+echo -e "${GREEN}=== HAX 纯 IPv6 专属极客部署 (终极 ALL IN ONE) ===${RESET}"
 
-# 1. 强制固化 NAT64/DNS64 网关 (纯6机器破冰必备)
-echo -e "\n${GREEN}[1/3] 正在配置 NAT64/DNS64 网关...${RESET}"
+# 1. 强制固化 NAT64/DNS64 网关 (纯6机器破冰)
+echo -e "\n${GREEN}[1/4] 正在固化 IPv4 访问能力...${RESET}"
 chattr -i /etc/resolv.conf 2>/dev/null || true
 echo -e "nameserver 2a00:1098:2b::1\nnameserver 2a01:4f8:c2c:123f::1" > /etc/resolv.conf
 chattr +i /etc/resolv.conf 2>/dev/null || true
 sleep 1
 
-# 2. 交互式录入核心参数
-echo -e "\n${GREEN}[2/3] 请输入你的节点配置参数：${RESET}"
-read -p "1. 输入 WARP PrivateKey (私钥): " WARP_PK
-read -p "2. 输入 WARP IPv6 (如 2606:4700... 注意末尾不要带 /128): " WARP_IPV6
-read -p "3. 输入 Reserved (包含方跨号，直接回车默认 [0,0,0]): " WARP_RESERVED
+# 2. 纯交互式获取所有参数 (绝对不强制指定)
+echo -e "\n${GREEN}[2/4] 请输入你的专属节点参数：${RESET}"
+echo -e "${YELLOW}--- WARP 拨号配置 ---${RESET}"
+read -p "1. WARP PrivateKey (私钥): " WARP_PK
+read -p "2. WARP IPv6 (如 2606:4700... 不带 /128): " WARP_IPV6
+read -p "3. Reserved (含方括号，回车默认 [0,0,0]): " WARP_RESERVED
 WARP_RESERVED=${WARP_RESERVED:-"[0,0,0]"}
-read -p "4. 输入你的 Argo 域名 (如 xxx.trycloudflare.com): " ARGO_DOMAIN
 
-# 自动生成内部参数
-VLESS_PORT=60001
+echo -e "\n${YELLOW}--- Argo 隧道配置 ---${RESET}"
+read -p "4. Argo Tunnel Token: " ARGO_TOKEN
+read -p "5. 绑定的 Argo 域名 (如 a.abc.com): " ARGO_DOMAIN
+
+echo -e "\n${YELLOW}--- Sing-box 节点配置 ---${RESET}"
+read -p "6. 设置本地监听端口 (如 60001): " VLESS_PORT
+read -p "7. 设置 WebSocket 路径 (如 /wolovelangduo520): " VLESS_PATH
+# 确保路径以 / 开头
+[[ "$VLESS_PATH" != /* ]] && VLESS_PATH="/$VLESS_PATH"
+
 VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
-VLESS_PATH="/wolovelangduo520"
+echo -e "\n-> 本机随机生成 UUID: ${YELLOW}${VLESS_UUID}${RESET}"
 
-echo -e "\n-> 内部端口分配: ${YELLOW}${VLESS_PORT}${RESET}"
-echo -e "-> 自动生成 UUID: ${YELLOW}${VLESS_UUID}${RESET}"
-
-# 3. 安装官方原版 Sing-box
-echo -e "\n${GREEN}[3/3] 正在安装 Sing-box 并写入原生直连配置...${RESET}"
-apt update -y && apt install -y curl gnupg2 ca-certificates
+# 3. 安装配置 Sing-box 服务端
+echo -e "\n${GREEN}[3/4] 正在安装并配置 Sing-box...${RESET}"
+apt update -y && apt install -y curl gnupg2 ca-certificates wget
 curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
 chmod a+r /etc/apt/keyrings/sagernet.asc
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" | tee /etc/apt/sources.list.d/sagernet.list > /dev/null
 apt update -y && apt install -y sing-box
 
-# 4. 写入原生 WireGuard 配置文件
 mkdir -p /etc/sing-box
 cat << EOF > /etc/sing-box/config.json
 {
@@ -94,19 +98,40 @@ cat << EOF > /etc/sing-box/config.json
 }
 EOF
 
-# 5. 启动服务
 systemctl enable --now sing-box
 systemctl restart sing-box
 
-# 6. 【核心升级】对路径进行 URL 编码并组装标准 VLESS 分享链接
-VLESS_PATH_ENC=$(echo -n "${VLESS_PATH}" | sed 's/\//%2F/g')
-VLESS_LINK="vless://${VLESS_UUID}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=httpupgrade&path=${VLESS_PATH_ENC}#HAX_Singbox_WARP"
+# 4. 安装配置 Cloudflare Argo 隧道
+echo -e "\n${GREEN}[4/4] 正在安装并注册 Cloudflare Argo 隧道...${RESET}"
+ARCH=$(uname -m)
+if [ "$ARCH" = "x86_64" ]; then
+    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"
+elif [ "$ARCH" = "aarch64" ]; then
+    URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb"
+else
+    echo -e "${RED}不支持的架构: $ARCH${RESET}"
+    exit 1
+fi
 
-echo "------------------------------------------------"
-echo -e "${GREEN}🎉 交互式部署大功告成！节点已无缝对接 Argo 隧道！${RESET}"
-echo "------------------------------------------------"
-echo -e "${GREEN}👇 请复制下方生成的 VLESS 一键导入链接 👇${RESET}"
+wget -qO cloudflared.deb "$URL"
+dpkg -i cloudflared.deb
+rm -f cloudflared.deb
+
+cloudflared service install "${ARGO_TOKEN}"
+systemctl start cloudflared
+systemctl enable cloudflared
+
+# 5. 生成客户端 VLESS 链接
+VLESS_PATH_ENC=$(echo -n "${VLESS_PATH}" | sed 's/\//%2F/g')
+VLESS_LINK="vless://${VLESS_UUID}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=httpupgrade&path=${VLESS_PATH_ENC}#HAX_Singbox"
+
+echo -e "\n========================================================="
+echo -e "${GREEN}🎉 ALL IN ONE 部署完成！Sing-box 与 Argo 隧道均已拉起！${RESET}"
+echo -e "========================================================="
+echo -e "${GREEN}👇 你的专属 VLESS 一键导入链接 👇${RESET}"
 echo -e "${YELLOW}${VLESS_LINK}${RESET}"
-echo "------------------------------------------------"
-echo -e "⚠️  提示: 你的 Cloudflare 隧道面板请将端口指向: ${YELLOW}localhost:${VLESS_PORT}${RESET}"
-echo "------------------------------------------------"
+echo -e "========================================================="
+echo -e "⚠️ 【最后一步】请前往 Cloudflare Zero Trust 控制台："
+echo -e "确保你的 Tunnels -> Public Hostname 流量转发目标设置为："
+echo -e "👉  ${YELLOW}http://localhost:${VLESS_PORT}${RESET}"
+echo -e "========================================================="
