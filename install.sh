@@ -3,7 +3,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 clear
 echo "=========================================================="
-echo "    欢迎使用 VLESS+Argo+WARP双出站(IPv6优先) 部署脚本"
+echo "    欢迎使用 VLESS+Argo+WARP双出站 (v1.13+ 现代架构版)"
 echo "=========================================================="
 echo ""
 
@@ -35,14 +35,14 @@ echo ">> [1/5] 正在安装系统基础组件..."
 apt update -y > /dev/null 2>&1
 apt install -y curl wget jq qrencode screen > /dev/null 2>&1
 
-# --- 3. 申请专属 WARP 账号与密钥 (带防卡死与备用引擎) ---
+# --- 3. 申请专属 WARP 账号与密钥 (双重引擎防卡死) ---
 echo ">> [2/5] 正在向 Cloudflare 申请专属 WARP 账号与密钥..."
 mkdir -p /root/warp_temp && cd /root/warp_temp
 
 sed -i '/api.cloudflareclient.com/d' /etc/hosts
 echo "2606:4700::6812:7c60 api.cloudflareclient.com" >> /etc/hosts
 
-wget -N https://ghproxy.net/https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf > /dev/null 2>&1
+wget -N https://github.moeyy.xyz/https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf > /dev/null 2>&1
 chmod +x /usr/local/bin/wgcf
 
 timeout 20 wgcf register --accept-tos > /dev/null 2>&1
@@ -54,7 +54,7 @@ WARP_IPV6=$(grep "Address" wgcf-profile.conf 2>/dev/null | tail -n 1 | awk -F ' 
 
 if [ -z "$WARP_PRIV_KEY" ]; then
     echo ">> wgcf 引擎申请超时，自动切换 warp-go 备用引擎..."
-    wget -N https://ghproxy.net/https://raw.githubusercontent.com/fscarmen/warp/main/warp-go/warp-go-linux-amd64 -O /usr/local/bin/warp-go > /dev/null 2>&1
+    wget -N https://github.moeyy.xyz/https://raw.githubusercontent.com/fscarmen/warp/main/warp-go/warp-go-linux-amd64 -O /usr/local/bin/warp-go > /dev/null 2>&1
     chmod +x /usr/local/bin/warp-go
     timeout 20 /usr/local/bin/warp-go --register --export-wireguard /root/warp_temp/warp.conf > /dev/null 2>&1
     
@@ -71,15 +71,15 @@ if [ -z "$WARP_PRIV_KEY" ]; then
 fi
 echo ">> WARP 账号生成成功！"
 
-# --- 4. 安装 Sing-box 内核 ---
-echo ">> [3/5] 正在安装 Sing-box 官方原生内核 (CDN加速版)..."
+# --- 4. 安装 Sing-box 最新内核 ---
+echo ">> [3/5] 正在安装 Sing-box 官方最新原生内核..."
 rm -rf /etc/sing-box/config.json 2>/dev/null
-wget -qO sing-box.deb "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/v1.13.12/sing-box_1.13.12_linux_amd64.deb"
+wget -qO sing-box.deb "https://github.moeyy.xyz/https://github.com/SagerNet/sing-box/releases/download/v1.13.12/sing-box_1.13.12_linux_amd64.deb"
 dpkg -i sing-box.deb > /dev/null 2>&1
 rm -f sing-box.deb
 
-# --- 5. 生成 Sing-box 专属配置 (已全面修复 v1.13+ 最新语法) ---
-echo ">> [4/5] 正在生成 Sing-box 专属配置..."
+# --- 5. 生成 Sing-box 专属配置 (全新 v1.13+ Endpoint 与 DNS 语法) ---
+echo ">> [4/5] 正在生成 Sing-box 专属配置 (现代化架构)..."
 cat > /etc/sing-box/config.json << CONFIG_EOF
 {
   "log": {
@@ -87,6 +87,53 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
     "level": "info",
     "timestamp": true
   },
+  "dns": {
+    "servers": [
+      {
+        "type": "https",
+        "tag": "dns_remote",
+        "server": "1.1.1.1",
+        "detour": "warp-out"
+      },
+      {
+        "type": "udp",
+        "tag": "dns_local",
+        "server": "2606:4700:4700::1111",
+        "detour": "direct"
+      }
+    ],
+    "rules": [
+      {
+        "outbound": "any",
+        "server": "dns_remote"
+      }
+    ]
+  },
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "warp-out",
+      "system": false,
+      "mtu": 1280,
+      "address": [
+        "${WARP_IPV4}",
+        "${WARP_IPV6}"
+      ],
+      "private_key": "${WARP_PRIV_KEY}",
+      "peers": [
+        {
+          "address": "2606:4700:d0::a29f:c001",
+          "port": 2408,
+          "public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+          "allowed_ips": [
+            "0.0.0.0/0",
+            "::/0"
+          ],
+          "reserved": [0,0,0]
+        }
+      ]
+    }
+  ],
   "inbounds": [
     {
       "type": "vless",
@@ -107,19 +154,6 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
   ],
   "outbounds": [
     {
-      "type": "wireguard",
-      "tag": "warp-out",
-      "server_address": "[2606:4700:d0::a29f:c001]:2408",
-      "local_address": [
-        "${WARP_IPV4}",
-        "${WARP_IPV6}"
-      ],
-      "private_key": "${WARP_PRIV_KEY}",
-      "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-      "reserved": [0,0,0],
-      "mtu": 1280
-    },
-    {
       "type": "block",
       "tag": "block-out"
     },
@@ -129,54 +163,28 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
     }
   ],
   "route": {
+    "default_domain_resolver": "dns_local",
     "rules": [
       {
         "inbound": "vless-in",
         "outbound": "warp-out"
       }
     ],
-    "default_domain_resolver": "dns_remote",
     "final": "block-out"
-  },
-  "dns": {
-    "servers": [
-      {
-        "tag": "dns_remote",
-        "address": "https://1.1.1.1/dns-query",
-        "address_resolver": "dns_local",
-        "strategy": "prefer_ipv6",
-        "detour": "warp-out"
-      },
-      {
-        "tag": "dns_local",
-        "address": "2606:4700:4700::1111",
-        "detour": "direct"
-      }
-    ],
-    "rules": [
-      {
-        "outbound": "any",
-        "server": "dns_remote"
-      }
-    ]
   }
 }
 CONFIG_EOF
 
-# 注入环境变量，强行放行旧版 DNS 语法检查，防止内核自爆
-mkdir -p /etc/systemd/system/sing-box.service.d
-cat << 'EOF' > /etc/systemd/system/sing-box.service.d/override.conf
-[Service]
-Environment="ENABLE_DEPRECATED_LEGACY_DNS_SERVERS=true"
-EOF
+# 彻底清理之前所有的旧版环境变量残留补丁
+rm -rf /etc/systemd/system/sing-box.service.d 2>/dev/null
 
 systemctl daemon-reload
 systemctl enable sing-box > /dev/null 2>&1
 systemctl restart sing-box
 
 # --- 6. 安装并启动 Argo 隧道 ---
-echo ">> [5/5] 正在打通 Argo CDN 隧道 (CDN加速版)..."
-curl -L "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" -o /usr/local/bin/cloudflared > /dev/null 2>&1
+echo ">> [5/5] 正在打通 Argo CDN 隧道..."
+curl -L "https://github.moeyy.xyz/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64" -o /usr/local/bin/cloudflared > /dev/null 2>&1
 chmod +x /usr/local/bin/cloudflared
 screen -S argo -X quit 2>/dev/null
 screen -dmS argo cloudflared tunnel --no-autoupdate run --token ${ARGO_TOKEN}
