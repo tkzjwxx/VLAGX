@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ====================================================
-# HAX 纯 IPv6 专属：Sing-box + WARP 原生双栈部署 (交互防阻断版)
-# 特性: 强制固化 NAT64, 纯手动填入 WARP 参数，100% 成功率无报错
+# HAX 纯 IPv6 专属：Sing-box + WARP 原生双栈（Argo 交互与分享链接版）
+# 特性: 固化 NAT64, 纯手动填入 WARP 参数, 自动生成 VLESS 一键导入链接
 # ====================================================
 
 GREEN="\033[32m"
@@ -10,30 +10,30 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
-echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (交互版) ===${RESET}"
+echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (Argo+链接版) ===${RESET}"
 
 # 1. 强制固化 NAT64/DNS64 网关 (纯6机器破冰必备)
 echo -e "\n${GREEN}[1/3] 正在配置 NAT64/DNS64 网关...${RESET}"
-# 解除可能存在的锁定
 chattr -i /etc/resolv.conf 2>/dev/null || true
 echo -e "nameserver 2a00:1098:2b::1\nnameserver 2a01:4f8:c2c:123f::1" > /etc/resolv.conf
-# 重新锁定防止系统重启覆盖
 chattr +i /etc/resolv.conf 2>/dev/null || true
 sleep 1
 
 # 2. 交互式录入核心参数
-echo -e "\n${GREEN}[2/3] 请粘贴你从网页 (LANRAT) 或本地获取的 WARP 节点参数：${RESET}"
+echo -e "\n${GREEN}[2/3] 请输入你的节点配置参数：${RESET}"
 read -p "1. 输入 WARP PrivateKey (私钥): " WARP_PK
 read -p "2. 输入 WARP IPv6 (如 2606:4700... 注意末尾不要带 /128): " WARP_IPV6
-read -p "3. 输入 Reserved (包含方括号，直接回车默认 [0,0,0]): " WARP_RESERVED
+read -p "3. 输入 Reserved (包含方跨号，直接回车默认 [0,0,0]): " WARP_RESERVED
 WARP_RESERVED=${WARP_RESERVED:-"[0,0,0]"}
+read -p "4. 输入你的 Argo 域名 (如 xxx.trycloudflare.com): " ARGO_DOMAIN
 
+# 自动生成内部参数
 VLESS_PORT=60001
 VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
 VLESS_PATH="/wolovelangduo520"
 
-echo -e "\n-> 分配 VLESS 端口: ${YELLOW}${VLESS_PORT}${RESET}"
-echo -e "-> 生成 VLESS UUID: ${YELLOW}${VLESS_UUID}${RESET}"
+echo -e "\n-> 内部端口分配: ${YELLOW}${VLESS_PORT}${RESET}"
+echo -e "-> 自动生成 UUID: ${YELLOW}${VLESS_UUID}${RESET}"
 
 # 3. 安装官方原版 Sing-box
 echo -e "\n${GREEN}[3/3] 正在安装 Sing-box 并写入原生直连配置...${RESET}"
@@ -43,7 +43,7 @@ chmod a+r /etc/apt/keyrings/sagernet.asc
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" | tee /etc/apt/sources.list.d/sagernet.list > /dev/null
 apt update -y && apt install -y sing-box
 
-# 4. 写入原生 WireGuard 终极配置
+# 4. 写入原生 WireGuard 配置文件
 mkdir -p /etc/sing-box
 cat << EOF > /etc/sing-box/config.json
 {
@@ -98,13 +98,15 @@ EOF
 systemctl enable --now sing-box
 systemctl restart sing-box
 
+# 6. 【核心升级】对路径进行 URL 编码并组装标准 VLESS 分享链接
+VLESS_PATH_ENC=$(echo -n "${VLESS_PATH}" | sed 's/\//%2F/g')
+VLESS_LINK="vless://${VLESS_UUID}@${ARGO_DOMAIN}:443?encryption=none&security=tls&sni=${ARGO_DOMAIN}&type=httpupgrade&path=${VLESS_PATH_ENC}#HAX_Singbox_WARP"
+
 echo "------------------------------------------------"
-echo -e "${GREEN}🎉 交互式部署大功告成！原生双栈节点已起飞！${RESET}"
+echo -e "${GREEN}🎉 交互式部署大功告成！节点已无缝对接 Argo 隧道！${RESET}"
 echo "------------------------------------------------"
-echo -e "你的 VLESS 连接信息如下："
-echo -e "端口:    ${YELLOW}443${RESET} (Argo 入口)"
-echo -e "UUID:    ${YELLOW}${VLESS_UUID}${RESET}"
-echo -e "路径:    ${YELLOW}${VLESS_PATH}${RESET}"
-echo -e "TLS:     ${YELLOW}开启 (填入你的 Argo 域名作为 SNI)${RESET}"
+echo -e "${GREEN}👇 请复制下方生成的 VLESS 一键导入链接 👇${RESET}"
+echo -e "${YELLOW}${VLESS_LINK}${RESET}"
 echo "------------------------------------------------"
-echo -e "⚠️ 请务必去 Cloudflare 隧道面板将端口指向: ${YELLOW}localhost:${VLESS_PORT}${RESET}"
+echo -e "⚠️  提示: 你的 Cloudflare 隧道面板请将端口指向: ${YELLOW}localhost:${VLESS_PORT}${RESET}"
+echo "------------------------------------------------"
