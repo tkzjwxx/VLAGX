@@ -10,7 +10,7 @@ echo ""
 # --- 1. 交互式获取用户参数 ---
 read -p "请输入 Argo 隧道绑定的域名 (如 us3.989269.xyz): " ARGO_DOMAIN
 read -p "请输入 Argo 隧道的 Token: " ARGO_TOKEN
-read -p "请输入 Sing-box 监听端口 (直接回车将默认设置为 8080): " USER_PORT
+read -p "请输入 Sing-box 监听端口 (直接回车默认设置为 8080): " USER_PORT
 if [ -z "$USER_PORT" ]; then
     USER_PORT="8080"
     echo "已设置为默认端口: 8080"
@@ -35,7 +35,7 @@ echo ">> [1/5] 正在安装系统基础组件..."
 apt update -y > /dev/null 2>&1
 apt install -y curl wget jq qrencode screen > /dev/null 2>&1
 
-# --- 3. 申请专属 WARP 账号与密钥 (带防卡死机制) ---
+# --- 3. 申请专属 WARP 账号与密钥 (带防卡死与备用引擎) ---
 echo ">> [2/5] 正在向 Cloudflare 申请专属 WARP 账号与密钥..."
 mkdir -p /root/warp_temp && cd /root/warp_temp
 
@@ -53,7 +53,7 @@ WARP_IPV4=$(grep "Address" wgcf-profile.conf 2>/dev/null | head -n 1 | awk -F ' 
 WARP_IPV6=$(grep "Address" wgcf-profile.conf 2>/dev/null | tail -n 1 | awk -F ' = ' '{print $2}')
 
 if [ -z "$WARP_PRIV_KEY" ]; then
-    echo ">> wgcf 引擎申请超时，自动切换备用引擎..."
+    echo ">> wgcf 引擎申请超时，自动切换 warp-go 备用引擎..."
     wget -N https://ghproxy.net/https://raw.githubusercontent.com/fscarmen/warp/main/warp-go/warp-go-linux-amd64 -O /usr/local/bin/warp-go > /dev/null 2>&1
     chmod +x /usr/local/bin/warp-go
     timeout 20 /usr/local/bin/warp-go --register --export-wireguard /root/warp_temp/warp.conf > /dev/null 2>&1
@@ -66,7 +66,7 @@ fi
 sed -i '/api.cloudflareclient.com/d' /etc/hosts
 
 if [ -z "$WARP_PRIV_KEY" ]; then
-    echo "错误：WARP 账号申请失败！"
+    echo "错误：WARP 账号申请彻底失败！当前网络环境极度受限。"
     exit 1
 fi
 echo ">> WARP 账号生成成功！"
@@ -78,7 +78,7 @@ wget -qO sing-box.deb "https://ghproxy.net/https://github.com/SagerNet/sing-box/
 dpkg -i sing-box.deb > /dev/null 2>&1
 rm -f sing-box.deb
 
-# --- 5. 生成 Sing-box 专属配置 (端口动态化) ---
+# --- 5. 生成 Sing-box 专属配置 (已全面修复 v1.13+ 最新语法) ---
 echo ">> [4/5] 正在生成 Sing-box 专属配置..."
 cat > /etc/sing-box/config.json << CONFIG_EOF
 {
@@ -109,8 +109,7 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
     {
       "type": "wireguard",
       "tag": "warp-out",
-      "server": "2606:4700:d0::a29f:c001",
-      "server_port": 2408,
+      "server_address": "[2606:4700:d0::a29f:c001]:2408",
       "local_address": [
         "${WARP_IPV4}",
         "${WARP_IPV6}"
@@ -164,7 +163,7 @@ cat > /etc/sing-box/config.json << CONFIG_EOF
 }
 CONFIG_EOF
 
-# 【核心修复】全自动注入环境变量，彻底解决最新内核遗留 DNS 报错卡死的问题
+# 注入环境变量，强行放行旧版 DNS 语法检查，防止内核自爆
 mkdir -p /etc/systemd/system/sing-box.service.d
 cat << 'EOF' > /etc/systemd/system/sing-box.service.d/override.conf
 [Service]
