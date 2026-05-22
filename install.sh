@@ -1,5 +1,4 @@
 #!/bin/bash
-# 强制屏蔽所有系统级的交互弹窗
 export DEBIAN_FRONTEND=noninteractive
 
 clear
@@ -50,13 +49,15 @@ fi
 echo ">> WARP 账号生成成功！(已获取双栈 IP 及私钥)"
 
 # --- 4. 安装 Sing-box 内核 ---
-echo ">> [3/5] 正在安装 Sing-box 官方原生内核 (将显示下载进度)..."
-# 改用官方原生脚本，彻底杜绝第三方脚本隐藏的回车交互导致的卡死
+echo ">> [3/5] 正在安装 Sing-box 官方原生内核..."
+# 清理可能存在的旧配置，防止安装时弹出 (Y/N) 交互阻断脚本
+rm -rf /etc/sing-box/config.json 2>/dev/null
 curl -fsSL https://sing-box.app/install.sh | bash
 
 # --- 5. 生成 Sing-box 专属配置 (内置 VLESS+WARP双栈+防泄漏) ---
 echo ">> [4/5] 正在生成 Sing-box 专属配置..."
-cat > /usr/local/etc/sing-box/config.json << CONFIG_EOF
+# 注意：这里改成了官方正确的 /etc/sing-box 路径！
+cat > /etc/sing-box/config.json << CONFIG_EOF
 {
   "log": {
     "disabled": false,
@@ -145,8 +146,8 @@ systemctl enable sing-box > /dev/null 2>&1
 systemctl restart sing-box
 
 # --- 6. 安装并启动 Argo 隧道 ---
-echo ">> [5/5] 正在打通 Argo CDN 隧道 (将显示下载进度)..."
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+echo ">> [5/5] 正在打通 Argo CDN 隧道..."
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared > /dev/null 2>&1
 chmod +x /usr/local/bin/cloudflared
 screen -S argo -X quit 2>/dev/null
 screen -dmS argo cloudflared tunnel --no-autoupdate run --token ${ARGO_TOKEN}
