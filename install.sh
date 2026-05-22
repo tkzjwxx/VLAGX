@@ -2,7 +2,7 @@
 
 # ====================================================
 # HAX 纯 IPv6 专属：Sing-box + WARP 全自动直连一键起飞脚本
-# 特性: 强制 NAT64, 代理加速下载, 全自动获取私钥与暗号
+# 特性: 强制 NAT64, 多重代理轮询下载, 全自动获取私钥与暗号
 # ====================================================
 
 GREEN="\033[32m"
@@ -10,13 +10,13 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
-echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (全自动版) ===${RESET}"
+echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (防弹全自动版) ===${RESET}"
 
-# 1. 强制固化 NAT64/DNS64 网关 (给机器装上 IPv4 义眼)
+# 1. 强制固化 NAT64/DNS64 网关
 echo -e "\n${GREEN}[1/4] 正在配置 NAT64/DNS64 网关...${RESET}"
 echo -e "nameserver 2a00:1098:2b::1\nnameserver 2a01:4f8:c2c:123f::1" > /etc/resolv.conf
 chattr +i /etc/resolv.conf 2>/dev/null || true
-sleep 2 # 等待网络生效
+sleep 2
 
 # 2. 生成节点基础参数
 VLESS_PORT=60001
@@ -36,15 +36,38 @@ case "$ARCH" in
     *) echo -e "${RED}不支持的 CPU 架构!${RESET}"; exit 1 ;;
 esac
 
-# 4. 使用双栈代理下载 warp-go (彻底解决纯6机器下载失败报错)
-echo -e "\n${GREEN}[3/4] 正在通过代理拉取发号引擎并申请参数...${RESET}"
-GH_PROXY="https://ghfast.top/"
-wget -qO warp-go.tar.gz "${GH_PROXY}https://github.com/fscarmen/warp/releases/download/v1.0.8/warp-go_1.0.8_linux_${W_ARCH}.tar.gz"
+# 4. 【核心升级】多重代理轮询下载机制
+echo -e "\n${GREEN}[3/4] 正在启动多重通道拉取发号引擎...${RESET}"
+DOWNLOAD_URL="https://github.com/fscarmen/warp/releases/download/v1.0.8/warp-go_1.0.8_linux_${W_ARCH}.tar.gz"
 
-# 校验下载文件是否完整
-if ! tar -tzf warp-go.tar.gz >/dev/null 2>&1; then
-    echo -e "${RED}发号引擎下载失败，请检查网络或更换代理节点。${RESET}"
-    rm -f warp-go.tar.gz
+# 定义备用通道池 (空字符串代表利用 NAT64 直连)
+PROXIES=(
+    "" 
+    "https://gh-proxy.com/"
+    "https://github.moeyy.xyz/"
+    "https://ghproxy.net/"
+)
+
+SUCCESS=false
+for proxy in "${PROXIES[@]}"; do
+    PREFIX=${proxy:-"NAT64直连通道"}
+    echo -e "尝试使用通道: ${YELLOW}${PREFIX}${RESET}"
+    
+    wget -qO warp-go.tar.gz "${proxy}${DOWNLOAD_URL}"
+    
+    # 校验下载文件是否为合法的压缩包
+    if tar -tzf warp-go.tar.gz >/dev/null 2>&1; then
+        SUCCESS=true
+        echo -e "-> ${GREEN}文件拉取成功！${RESET}"
+        break
+    else
+        echo -e "-> ${RED}该通道失败，自动切换下一通道...${RESET}"
+        rm -f warp-go.tar.gz
+    fi
+done
+
+if [ "$SUCCESS" = false ]; then
+    echo -e "${RED}所有下载通道均失败，请稍后重试或检查 VPS 网络状态。${RESET}"
     exit 1
 fi
 
@@ -52,10 +75,11 @@ tar -xzf warp-go.tar.gz warp-go
 chmod +x warp-go
 
 # 自动向 Cloudflare 申请全新账号
+echo -e "\n正在向 Cloudflare 申请专属 WARP 参数..."
 ./warp-go --register --export warp.conf >/dev/null 2>&1
 
 if [ ! -f "warp.conf" ]; then
-    echo -e "${RED}WARP 账号申请失败，可能是 Cloudflare 临时限制了当前 IP。${RESET}"
+    echo -e "${RED}WARP 账号申请失败，可能是 CF 限制了当前 IP。${RESET}"
     rm -f warp-go warp-go.tar.gz
     exit 1
 fi
