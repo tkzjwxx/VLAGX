@@ -2,7 +2,7 @@
 
 # ====================================================
 # HAX 纯 IPv6 专属：Sing-box + WARP + Argo 终极全自动闭环版
-# 特性: 强制固化 NAT64, 纯交互式参数录入, 零硬编码, 一键双端拉起
+# 特性: 强制固化 NAT64, 纯交互式参数录入, 强制 IPv4 绕过残缺路由
 # ====================================================
 
 GREEN="\033[32m"
@@ -10,7 +10,7 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
-echo -e "${GREEN}=== HAX 纯 IPv6 专属极客部署 (终极 ALL IN ONE) ===${RESET}"
+echo -e "${GREEN}=== HAX 纯 IPv6 专属极客部署 (终极强杀 ALL IN ONE) ===${RESET}"
 
 # 1. 强制固化 NAT64/DNS64 网关 (纯6机器破冰)
 echo -e "\n${GREEN}[1/4] 正在固化 IPv4 访问能力...${RESET}"
@@ -40,13 +40,13 @@ read -p "7. 设置 WebSocket 路径 (如 /wolovelangduo520): " VLESS_PATH
 VLESS_UUID=$(cat /proc/sys/kernel/random/uuid)
 echo -e "\n-> 本机随机生成 UUID: ${YELLOW}${VLESS_UUID}${RESET}"
 
-# 3. 安装配置 Sing-box 服务端
-echo -e "\n${GREEN}[3/4] 正在安装并配置 Sing-box...${RESET}"
-apt update -y && apt install -y curl gnupg2 ca-certificates wget
-curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+# 3. 安装配置 Sing-box 服务端 (强制走 IPv4 隧道规避超时)
+echo -e "\n${GREEN}[3/4] 正在强制通过 NAT64 安装 Sing-box...${RESET}"
+apt -o Acquire::ForceIPv4=true update -y && apt -o Acquire::ForceIPv4=true install -y curl gnupg2 ca-certificates wget
+curl -4 -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
 chmod a+r /etc/apt/keyrings/sagernet.asc
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" | tee /etc/apt/sources.list.d/sagernet.list > /dev/null
-apt update -y && apt install -y sing-box
+apt -o Acquire::ForceIPv4=true update -y && apt -o Acquire::ForceIPv4=true install -y sing-box
 
 mkdir -p /etc/sing-box
 cat << EOF > /etc/sing-box/config.json
@@ -101,7 +101,7 @@ EOF
 systemctl enable --now sing-box
 systemctl restart sing-box
 
-# 4. 安装配置 Cloudflare Argo 隧道
+# 4. 安装配置 Cloudflare Argo 隧道 (强制走 IPv4 规避超时)
 echo -e "\n${GREEN}[4/4] 正在安装并注册 Cloudflare Argo 隧道...${RESET}"
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
@@ -113,7 +113,7 @@ else
     exit 1
 fi
 
-wget -qO cloudflared.deb "$URL"
+wget -4 -qO cloudflared.deb "$URL"
 dpkg -i cloudflared.deb
 rm -f cloudflared.deb
 
