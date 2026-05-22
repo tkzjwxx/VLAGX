@@ -2,7 +2,7 @@
 
 # ====================================================
 # HAX 纯 IPv6 专属：Sing-box + WARP 全自动直连一键起飞脚本
-# 特性: 强制 NAT64, 多重代理轮询下载, 全自动获取私钥与暗号
+# 特性: 强制 NAT64, 官方 GitLab 直连下载, 完美规避 404
 # ====================================================
 
 GREEN="\033[32m"
@@ -10,7 +10,7 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
-echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (防弹全自动版) ===${RESET}"
+echo -e "${GREEN}=== 启动 HAX 纯 IPv6 专属极客部署 (GitLab 破冰版) ===${RESET}"
 
 # 1. 强制固化 NAT64/DNS64 网关
 echo -e "\n${GREEN}[1/4] 正在配置 NAT64/DNS64 网关...${RESET}"
@@ -36,41 +36,20 @@ case "$ARCH" in
     *) echo -e "${RED}不支持的 CPU 架构!${RESET}"; exit 1 ;;
 esac
 
-# 4. 【核心升级】多重代理轮询下载机制
-echo -e "\n${GREEN}[3/4] 正在启动多重通道拉取发号引擎...${RESET}"
-DOWNLOAD_URL="https://github.com/fscarmen/warp/releases/download/v1.0.8/warp-go_1.0.8_linux_${W_ARCH}.tar.gz"
+# 4. 【核心修复】从官方 GitLab 仓库直连拉取发号引擎
+echo -e "\n${GREEN}[3/4] 正在从官方 GitLab 源获取发号引擎...${RESET}"
+GITLAB_URL="https://gitlab.com/fscarmen/warp/-/raw/main/warp-go/warp-go_1.0.8_linux_${W_ARCH}.tar.gz"
 
-# 定义备用通道池 (空字符串代表利用 NAT64 直连)
-PROXIES=(
-    "" 
-    "https://gh-proxy.com/"
-    "https://github.moeyy.xyz/"
-    "https://ghproxy.net/"
-)
+wget -qO warp-go.tar.gz "${GITLAB_URL}"
 
-SUCCESS=false
-for proxy in "${PROXIES[@]}"; do
-    PREFIX=${proxy:-"NAT64直连通道"}
-    echo -e "尝试使用通道: ${YELLOW}${PREFIX}${RESET}"
-    
-    wget -qO warp-go.tar.gz "${proxy}${DOWNLOAD_URL}"
-    
-    # 校验下载文件是否为合法的压缩包
-    if tar -tzf warp-go.tar.gz >/dev/null 2>&1; then
-        SUCCESS=true
-        echo -e "-> ${GREEN}文件拉取成功！${RESET}"
-        break
-    else
-        echo -e "-> ${RED}该通道失败，自动切换下一通道...${RESET}"
-        rm -f warp-go.tar.gz
-    fi
-done
-
-if [ "$SUCCESS" = false ]; then
-    echo -e "${RED}所有下载通道均失败，请稍后重试或检查 VPS 网络状态。${RESET}"
+# 校验下载文件是否为合法的压缩包
+if ! tar -tzf warp-go.tar.gz >/dev/null 2>&1; then
+    echo -e "${RED}文件拉取失败！GitLab 拒绝了连接，请检查网关。${RESET}"
+    rm -f warp-go.tar.gz
     exit 1
 fi
 
+echo -e "-> ${GREEN}成功突破网络限制，文件下载完整！${RESET}"
 tar -xzf warp-go.tar.gz warp-go
 chmod +x warp-go
 
