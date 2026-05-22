@@ -1,8 +1,8 @@
 #!/bin/bash
 #===================================================
-# 蓝多依诺 VPS 一键部署脚本 (官方 sing-box + WARP + Argo)
-# 协议: VLESS + HTTPUpgrade, WARP 通过 WireGuard 端点出站
-# 完全使用 curl，无 wget 依赖
+# 蓝多依诺 VPS 一键部署脚本 (完整版)
+# 协议: VLESS + HTTPUpgrade + WARP WireGuard + Argo Tunnel
+# sing-box 采用官方二进制安装，绕过 API 限制
 #===================================================
 set -e
 
@@ -32,14 +32,58 @@ apt update -qq
 info "安装基础依赖 (curl, screen, jq, uuid-runtime)..."
 apt install -y -qq curl screen jq uuid-runtime
 
-# ----- 使用官方脚本安装 sing-box -----
+# ----- 使用二进制安装 sing-box（绕过 GitHub API 限制） -----
 if ! command -v sing-box &> /dev/null; then
-    info "安装官方 sing-box..."
-    curl -fsSL https://sing-box.app/install.sh | sh
-    # 官方安装后可能在 /usr/local/bin，检查一下
-    if ! command -v sing-box &> /dev/null; then
-        error "sing-box 安装失败，请检查网络或手动安装"
+    info "获取 sing-box 最新版本号..."
+    LATEST_VERSION=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name' | sed 's/^v//')
+    if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
+        LATEST_VERSION="1.13.11"
+        warn "无法获取最新版本，使用默认版本: v$LATEST_VERSION"
     fi
+
+    DOWNLOAD_URL="https://github.com/SagerNet/sing-box/releases/download/v$LATEST_VERSION/sing-box-$LATEST_VERSION-linux-amd64.tar.gz"
+
+    info "下载 sing-box v$LATEST_VERSION..."
+    for i in 1 2 3; do
+        if curl -L "$DOWNLOAD_URL" -o /tmp/sing-box.tar.gz; then
+            info "下载成功"
+            break
+        else
+            warn "下载失败，重试第 $i 次..."
+            sleep 3
+        fi
+    done
+
+    if [ ! -f /tmp/sing-box.tar.gz ]; then
+        error "sing-box 下载失败，请检查网络连接"
+    fi
+
+    info "解压安装 sing-box..."
+    tar -xzf /tmp/sing-box.tar.gz -C /usr/local/bin "sing-box-$LATEST_VERSION-linux-amd64/sing-box"
+    mv "/usr/local/bin/sing-box-$LATEST_VERSION-linux-amd64/sing-box" /usr/local/bin/sing-box
+    chmod +x /usr/local/bin/sing-box
+    rm -rf /tmp/sing-box.tar.gz "/usr/local/bin/sing-box-$LATEST_VERSION-linux-amd64"
+
+    # 创建 systemd 服务文件
+    cat > /etc/systemd/system/sing-box.service <<'SYSTEMD_EOF'
+[Unit]
+Description=sing-box service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target
+SYSTEMD_EOF
+
+    systemctl daemon-reload
+    info "sing-box 安装完成"
 else
     info "sing-box 已安装，版本: $(sing-box version | head -1)"
 fi
